@@ -1,0 +1,46 @@
+<!DOCTTYPE html>
+<html>
+
+<head>
+<!字体符号>  <meta charset="utf-8">                                                
+<!网页名称>  <title>产品</title>                                                        
+<!CSS风格>  <style>
+                   div{
+	    background-color:yellow;
+                }
+                   </style>
+</head>
+
+  <body>
+<!标题1>     <h1 style="text-align:center;font-family:arial;color:white;font-size:20px; background-color:green;" >产品列表</h1>                                                     
+                             <!居中对齐；             字体； 字体颜色；字体大小；      背景色；>
+<!标题2>     <h2 style="left:50px;width:100px;height:30px;background-color:red;">产品明细 </h2>   
+                             <!背景色左边距离；宽度；高度；>
+
+<!段落>      <p>33691#金灶  玻璃电热煮茶器A-99 (智能保温) </p>
+<img  src=http://mob.cmcloud.cn/serverCloud/Yunpan/showpic?g3=326919&appid=kiscloudserver&ftype=img&fcode=3381997d-6af2-43e4-bc85-b2e3adf293cf20180201025807 width="500" height="500">     
+                                                                                                                                                                                                                                                                           <!width="500" height="500"为限制图片显示大小>
+<!段落>     <p>37617#金灶  不锈钢电热双灶K-9黑 (全智能)     </p>    
+<img border="10" src=http://mob.cmcloud.cn/serverCloud/Yunpan/showpic?g3=326919&appid=kiscloudserver&ftype=img&fcode=4b045fc2-3676-435d-b548-11866753ea4e20190225102901 alt="图片无法加载"  width="500" height="500">
+<! border 边框>                                                                                                                                                                                                                                 <!alt="图片无法加载时显示" 定义图片无法加载时显示的文本内容>
+
+<!标题3>   <h3>表单</h3>                                                         
+<form>                                                                          <!输入文本框>
+  Text：<input type="text" name=" 文本框" ><br/> 
+  Radio：<input type="Radio" name=" 单选框" ><br/>
+  Checkbox：<input type="checkbox" name=" 复选框" ><br/>
+  Button：<input type=" button"  value=" button"><br/>
+  Submit：<input type=" submit"  value=" submit"><br/>
+</form>
+
+<!标题4>   <h4>CSS背景色</h4>      
+                 <div>  这是一个定义了CSS背景色的背景       </div>   
+
+<!换行符>   <br/><br/><br/><br/><br/><br/><br/>     
+
+ </body>
+
+
+                
+</html>
+
