@@ -1,0 +1,790 @@
+
+DECLARE @custid INT
+DECLARE @empid INT
+DECLARE @accessFilter NVARCHAR(1)
+DECLARE @stockFilter NVARCHAR(58)
+DECLARE @page INT
+DECLARE @pageSize INT
+DECLARE @isBarCode INT
+DECLARE @key NVARCHAR(1)
+
+SET @custid = 26254
+SET @empid = 301
+SET @accessFilter = N''
+SET @stockFilter = N'FStockID in (308,309,310,311,312,313,314,315,316,317,318)'
+SET @page = 1
+SET @pageSize = 20
+SET @isBarCode = 0
+SET @key = N' '
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#stock')
+		)
+	DROP TABLE [#stock]
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#product')
+		)
+	DROP TABLE [#product]
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#keywords')
+		)
+	DROP TABLE [#keywords]
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#itemkeywords')
+		)
+	DROP TABLE [#itemkeywords]
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#itembingo')
+		)
+	DROP TABLE [#itembingo]
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#itembingo2')
+		)
+	DROP TABLE #itembingo2
+
+IF EXISTS (
+		SELECT 1
+		FROM tempdb..sysobjects
+		WHERE id = object_id('tempdb..#ptypeTable')
+		)
+	DROP TABLE #ptypeTable
+
+--上架分类
+CREATE TABLE #ptypeTable (
+	--商品类型表(仅上架时使用)
+	FItemID INT, Display INT
+	)
+
+--获取产品类型状态
+INSERT INTO #ptypeTable (FItemID, Display)
+SELECT t.FItemID, (
+		CASE 
+			WHEN d.FItemID IS NULL
+				THEN 1
+			WHEN d.FDisplay = 0
+				THEN 0
+			ELSE 1
+			END
+		) AS Display
+FROM (
+	SELECT FItemID, FNumber, FName, FParentID, FLevel
+	FROM t_item
+	WHERE FItemClassID = 9998 AND FLevel = 1 AND FDeleted = 0
+	
+	UNION ALL
+	
+	SELECT t2.FItemID, t2.FNumber, t2.FName, t1.FItemID, 2 AS FLevel
+	FROM t_item t1
+	INNER JOIN t_item t2 ON t2.FNumber LIKE t1.FNumber + '.%'
+	WHERE t1.FItemClassID = 9998 AND t2.FItemClassID = 9998 AND t1.FParentID = 0 AND t2.FParentID > 0 AND t2.FDetail = 1 AND t1.FDeleted = 0 AND t2.FDeleted = 0
+	
+	UNION ALL
+	
+	SELECT 0, 'yyyyyyyy', '未分类', 0, 1
+	
+	UNION ALL
+	
+	SELECT - 1, 'zzzzzzz1', '未上架', 0, 1
+	
+	UNION ALL
+	
+	--未上架明细分类
+	SELECT t.FItemID, t.FNumber, t.FName, (
+			CASE 
+				WHEN t.FParentID = 0
+					THEN - 1
+				ELSE t.FParentID
+				END
+			) AS FParentID, FLevel + 1
+	FROM t_Item t
+	LEFT JOIN t_ICItem i ON i.FItemID = t.FItemID
+	WHERE t.FItemClassID = 4 AND t.FDeleted = 0 AND i.FItemID IS NULL
+	) t
+LEFT JOIN t_wo_DisplayItemClass d ON d.FItemID = t.FItemID
+
+--查询关键字处理				
+CREATE TABLE #keywords (keyname NVARCHAR(max))
+
+CREATE TABLE #itemkeywords (fitemid VARCHAR(100), keywords VARCHAR(max))
+
+CREATE NONCLUSTERED INDEX [NonClusteredIndex-DeliveryCount] ON #itemkeywords (fitemid ASC)
+
+CREATE TABLE #itembingo (fitemid VARCHAR(100), bingo INT)
+
+CREATE TABLE #itembingo2 (fitemid VARCHAR(100), bingo INT)
+
+INSERT INTO #keywords
+SELECT FValue
+FROM fn_SplitStringToTable(@key, ' ')
+
+DECLARE @tempKey NVARCHAR(64)
+
+IF @key = ' '
+BEGIN
+	INSERT INTO #itembingo
+	SELECT t.FItemID, t.bingo
+	FROM (
+		SELECT ROW_NUMBER() OVER (
+				ORDER BY FNumber asc
+				) AS RowNumber, dataTable.*
+		FROM (
+			SELECT cast(t2.FItemID AS NVARCHAR(32)) AS FItemID, t2.FNumber, t2.FName, 1 bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN #ptypeTable p ON t2.FParentID = p.FItemID and p.Display=1
+			LEFT JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and t6.FItemID is null and (1=1)
+			
+            UNION
+
+			SELECT cast(t2.FItemID AS NVARCHAR(32)) AS FItemID, t2.FNumber, t2.FName, 1 bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			INNER JOIN #ptypeTable p ON t6.FType = p.FItemID and p.Display=1
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and (1=1)
+
+			UNION
+			
+			SELECT t1.FParentID, t1.FParentNumber, t1.FParentName, 1
+			FROM dbo.t_wo_ItemExt t1
+			INNER JOIN #ptypeTable p ON t1.FType = p.FItemID and p.Display=1
+			) AS dataTable
+		) AS t
+	WHERE RowNumber BETWEEN ((@page - 1) * @pageSize + 1)
+			AND (@page * @pageSize)
+END
+ELSE IF (
+		SELECT count(*)
+		FROM #keywords
+		) = 1
+BEGIN
+	SELECT @tempKey = '%' + rtrim(@key) + '%'
+	FROM #keywords
+
+	INSERT INTO #itembingo
+	SELECT t.FItemID, t.bingo
+	FROM (
+		SELECT ROW_NUMBER() OVER (
+				ORDER BY FNumber asc
+				) AS RowNumber, dataTable.*
+		FROM (
+			SELECT cast(t2.FItemID AS NVARCHAR(32)) AS FItemID, t2.FNumber,t2.FName, 1 bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN #ptypeTable p ON t2.FParentID = p.FItemID and p.Display=1
+			LEFT JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and t6.FItemID is null and  (1=1) AND (
+					(@isBarCode = 0 AND (t2.FHelpCode LIKE @tempKey OR t2.FName LIKE @tempKey OR t2.FModel LIKE @tempKey OR t2.FNumber LIKE @tempKey)) OR (
+						@isBarCode = 1 AND EXISTS (
+							SELECT FItemID
+							FROM t_BarCode tBarCode
+							WHERE tBarCode.FBarCode = @key AND t2.FItemID = FItemID
+							)
+						)
+					)
+			
+			UNION
+
+			SELECT cast(t2.FItemID AS NVARCHAR(32)) AS FItemID, t2.FNumber,t2.FName, 1 bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			INNER JOIN #ptypeTable p ON t6.FType = p.FItemID and p.Display=1
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and  (1=1) AND (
+					(@isBarCode = 0 AND (t2.FHelpCode LIKE @tempKey OR t2.FName LIKE @tempKey OR t2.FModel LIKE @tempKey OR t2.FNumber LIKE @tempKey)) OR (
+						@isBarCode = 1 AND EXISTS (
+							SELECT FItemID
+							FROM t_BarCode tBarCode
+							WHERE tBarCode.FBarCode = @key AND t2.FItemID = FItemID
+							)
+						)
+					)
+			
+			UNION
+			
+			
+			SELECT t1.FParentID, t1.FParentNumber, t1.FParentName, 1
+			FROM dbo.t_wo_ItemExt t1
+			INNER JOIN #ptypeTable p ON t1.FType = p.FItemID and p.Display=1
+			WHERE (t1.FParentName LIKE @tempKey OR t1.FParentModel LIKE @tempKey OR t1.FParentNumber LIKE @tempKey) AND @isBarCode = 0
+			) AS dataTable
+		) AS t
+	WHERE RowNumber BETWEEN ((@page - 1) * @pageSize + 1)
+			AND (@page * @pageSize)
+END
+ELSE
+BEGIN
+	update #keywords set keyname='%'+keyname+'%'
+	declare @keyCount int
+	set @keyCount=(
+			SELECT count(*)
+			FROM #keywords
+			)
+	INSERT INTO #itembingo
+	select pt.FItemID,pt.bingo from (
+		SELECT ROW_NUMBER() OVER (
+				ORDER BY FNumber asc
+				) AS RowNumber, t.FItemID, t.bingo, t.FNumber, t.FName
+		FROM (
+			SELECT cast(t2.FItemID as nvarchar(32)) FItemID, t2.FNumber, t2.FName, @keyCount as bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN #ptypeTable p ON t2.FParentID = p.FItemID and p.Display=1
+			LEFT JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and t6.FItemID is null and  (1=1) AND (select count(*) from #keywords kw where t2.FHelpCode like kw.keyname or t2.FName like kw.keyname or t2.FModel like kw.keyname or t2.FNumber like kw.keyname )=@keyCount
+
+			union
+
+			SELECT cast(t2.FItemID as nvarchar(32)) FItemID, t2.FNumber, t2.FName, @keyCount as bingo
+			FROM t_ICItem t2
+			INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+			INNER JOIN t_wo_item t6 ON t6.FItemID = t2.FItemID
+			INNER JOIN #ptypeTable p ON t6.FType = p.FItemID and p.Display=1
+			LEFT JOIN Access_t_Item AS access ON access.FItemID = t2.FItemID
+			WHERE t2.FDeleted = 0 and  (1=1) AND (select count(*) from #keywords kw where t2.FHelpCode like kw.keyname or t2.FName like kw.keyname or t2.FModel like kw.keyname or t2.FNumber like kw.keyname )=@keyCount
+
+			union
+	 
+			SELECT t1.FParentID, t1.FParentNumber,t1.FParentName, @keyCount as bingo
+			FROM dbo.t_wo_ItemExt t1(NOLOCK)
+			INNER JOIN #ptypeTable p ON t1.FType = p.FItemID and p.Display=1
+			where ( (select count(*) from #keywords kw where t1.FParentName like  kw.keyname or t1.FParentModel like kw.keyname or t1.FParentNumber like kw.keyname)=@keyCount)
+		) as t
+	) pt
+	WHERE RowNumber BETWEEN ((@page - 1) * @pageSize + 1)
+			AND (@page * @pageSize)
+	
+END
+
+DECLARE @sql VARCHAR(max)
+
+--2.授权的仓库信息（包括虚仓）
+CREATE TABLE #stock ([FItemID] [int] NOT NULL, [FAuxPropID] [int] NOT NULL, [FQty] [decimal](28, 10) NOT NULL,)
+
+--3.获取商品数据
+SET @sql = ''
+--4.获取仓库数据(没过滤授权商品)
+SET @sql = ''
+
+--@stockFilter,不过滤
+IF (@stockFilter = '')
+BEGIN
+	SET @sql = 'insert into #stock 
+				  SELECT    a.FItemID,a.FAuxPropID,a.FQty
+				  FROM      ICInventory a (nolock) 
+				  UNION ALL
+				  SELECT    b.FItemID,b.FAuxPropID,b.FQty
+				  FROM      dbo.POInventory b (nolock)  '
+END
+ELSE
+BEGIN
+	SET @sql = 'insert into #stock 
+				  SELECT    a.FItemID,a.FAuxPropID,a.FQty
+				  FROM      ICInventory a (nolock)  
+					where a.' + @stockFilter + '
+				  UNION ALL
+				  SELECT    b.FItemID,b.FAuxPropID,b.FQty
+				  FROM      dbo.POInventory b (nolock)  
+					where b.' + @stockFilter
+END
+
+EXECUTE (@sql)
+
+--库存显示类型，计算即时库存-销售订单未发货数量（30天内），变为负数加进去
+DECLARE @qtyShowType INT
+
+SET @qtyShowType = 0
+
+SELECT @qtyShowType = ISNULL(FValue, 0)
+FROM t_wo_Profile
+WHERE FCategory = 'Mobile' AND FKey = 'StockShowType'
+
+IF (@qtyShowType = 1)
+BEGIN
+	INSERT INTO #stock
+	SELECT sen.FItemID, 0 FAuxPropID, - sum(sen.FQty - sen.FCommitQty) FQty
+	FROM Seorderentry sen(NOLOCK)
+	INNER JOIN Seorder se(NOLOCK) ON se.FInterID = sen.FInterID AND se.FStatus IN (
+			0
+			,1
+			,2
+			) AND se.FClosed = 0 AND se.FCancellation = 0 AND sen.FMrpClosed = 0 AND se.FDate >= DateAdd(day, - 30, getdate()) AND (se.FIsTrans2WebOrder <> 'Y')
+	--	or Not Exists( select 1 from IC_Web2ERPOrders wo (NOLOCK) where wo.FSiteOrderID=convert(nvarchar(40),se.FInterID))
+	LEFT JOIN IC_Web2ERPOrders wo(NOLOCK) ON wo.FSiteOrderID = convert(NVARCHAR(40), se.FInterID)
+	WHERE wo.FSiteOrderID IS NULL
+	--And (@para=0 Or (@para=1 and s.FItemID is not null))
+	GROUP BY sen.FItemID
+END
+
+--5.获取数据
+DECLARE @ctype INT --客户等级
+DECLARE @etype INT --职员等级
+DECLARE @showType INT --显示商品分类参数
+
+--0.获取当前显示分类参数(1显示微商城，2显示非微商城，0全部显示)
+SELECT @showType = FValue
+FROM t_SystemProfile
+WHERE FKey = 'IsShowType' AND FCategory = 'Mobile'
+
+SET @showType = ISNULL(@showType, 0)
+--1.获取客户等级id	
+SET @ctype = 0
+
+SELECT @ctype = FTypeID
+FROM t_Organization
+WHERE FItemID = @custid
+
+SET @etype = 0
+
+SELECT @etype = isnull(FEmpGroup, 0)
+FROM t_Emp
+WHERE FItemID = @empid
+
+--2.创建临时表	
+DECLARE @t TABLE (
+	FItemID NVARCHAR(50), FImageUrl NVARCHAR(2000), FName NVARCHAR(2000), FNumber NVARCHAR(2000), FModel NVARCHAR(2000), FUnitID INT, FUnitName NVARCHAR(2000), FOnlineDate DATETIME, FQty DECIMAL(28, 10), FPrice DECIMAL(28, 13), auxType INT,
+	--商品取值来源
+	FMaxPrice DECIMAL(28, 13), FQtyPlus DECIMAL(28, 2), FQtyMinus DECIMAL(28, 2), onsale INT --1上架的;0未上架
+	, needBaseImg INT DEFAULT(0), [DeliveryCount] [int] NOT NULL
+	)
+DECLARE @qty TABLE (
+	FItemID NVARCHAR(50) PRIMARY KEY, FQtyPlus DECIMAL(28, 2),
+	--正数
+	FQtyMinus DECIMAL(28, 2) --负数
+	)
+DECLARE @stock TABLE (
+	--即时库存表
+	FItemID INT PRIMARY KEY, FQty DECIMAL(28, 10)
+	)
+DECLARE @stock1 TABLE (
+	--即时库存表(按辅助属性)
+	FItemID INT, FAuxPropID INT, FQty DECIMAL(28, 10)
+	)
+DECLARE @price TABLE (
+	--价格表
+	FItemID INT PRIMARY KEY, FMinPrice DECIMAL(28, 10), FMaxPrice DECIMAL(28, 10)
+	)
+
+--3.即时库存
+INSERT INTO @stock (FItemID, FQty)
+SELECT t.FItemID, SUM(t.FQty)
+FROM #stock t
+GROUP BY t.FItemID
+
+INSERT INTO @stock1 (FItemID, FAuxPropID, FQty)
+SELECT t.FItemID, FAuxPropID, SUM(t.FQty)
+FROM #stock t
+GROUP BY t.FItemID, t.FAuxPropID
+
+--4.价格
+INSERT INTO @price (FItemID, FMinPrice, FMaxPrice)
+SELECT icpe.FItemID, min(icpe.FPrice) AS FMinPrice, max(icpe.FPrice) AS FMaxPrice
+FROM dbo.ICPrcPly icp(NOLOCK)
+LEFT JOIN dbo.ICPrcPlyEntry icpe(NOLOCK) ON icp.FInterID = icpe.FInterID
+WHERE icpe.FChecked = 1 AND icpe.FRelatedID IN (
+		@custid
+		,@ctype
+		,@empid
+		,@etype
+		) AND icpe.FBegDate <= getdate() AND icpe.FEndDate >= getdate()
+GROUP BY icpe.FItemID
+
+--5.获取及时库的商品信息	
+INSERT INTO @t (FItemID, FImageUrl, FName, FNumber, FModel, FUnitID, FUnitName, FOnlineDate, FQty, FPrice, auxType, FMaxPrice, onsale, DeliveryCount)
+--5.1上架商品_普通商品	
+SELECT CONVERT(NVARCHAR(50), t1.FItemID) AS FItemID,
+	--物料内码
+	ISNULL(t1.FImageUrl, '') AS FImageUrl,
+	--图片
+	t2.FName,
+	--商品名称
+	t2.FNumber AS FNumber,
+	--商品代码
+	--ISNULL(t1.FModel, '') AS FModel,
+	----规格型号
+----老师修改规格型号
+	'历销价:'+ISNULL(convert(NVARCHAR(20),SYINNER.FAuxPriceDiscount ),'')+ISNULL(t1.FModel, '') AS FModel,
+--老师修改规格型号
+	t3.FMeasureUnitID AS FUnitID, t3.FName AS FUnitName,
+	--销售计量单位名称
+	t1.FOnLIneDate, ISNULL(t4.FQty, 0) / t3.FCoefficient AS FQty,
+	--销售单位库存
+	CASE 
+		WHEN isnull(pr.FMinPrice, 0) = 0 AND isnull(t1.FPrice, isnull(t2.fsaleprice, 0) * t3.FCoefficient) <> 0
+			THEN isnull(t1.FPrice, isnull(t2.fsaleprice, 0) * t3.FCoefficient)
+		ELSE isnull(pr.FMinPrice, 0)
+		END AS FPrice,
+	--商品价格
+	0 AS auxType,
+	--商品取值来源
+	isnull(pr.FMaxPrice, 0) AS FMaxPrice,
+	--价格最大值
+	1 AS onsale, 0 DeliveryCount
+FROM dbo.t_wo_Item t1(NOLOCK)
+INNER JOIN t_ICItem t2(NOLOCK) ON t1.FItemID = t2.FItemID
+INNER JOIN dbo.t_MeasureUnit t3(NOLOCK) ON t2.FSaleUnitID = t3.FMeasureUnitID
+LEFT JOIN @stock t4 ON t1.FItemID = t4.FItemID
+LEFT JOIN @price pr ON pr.FItemID = t1.FItemID --价格
+--老师新加语句
+LEFT JOIN 
+(select FcustID,FItemID,FAuxPriceDiscount FROM(    
+select A.FcustID,FItemID,FAuxPriceDiscount
+,row_number() over (partition by FItemID order by FDATE desc,a.FInterID desc) as group_idx    FROM ICSale a 
+Inner Join ICSaleEntry    b   on a.FInterID=b.FInterID 
+where A.FcustID=@custid ) A where A.group_idx = 1 ) SYINNER ON t1.FItemID=SYINNER.FItemID AND SYINNER.FcustID=@custid
+--老师新加语句
+
+WHERE @showType <> 2 AND t1.FStatus = 1 AND (t2.FAuxClassID IS NULL OR t2.FAuxClassID = 0) AND EXISTS (
+		SELECT 1
+		FROM #itembingo k
+		WHERE k.fitemid = convert(VARCHAR(100), t2.FItemID)
+		)
+
+INSERT INTO @t (FItemID, FImageUrl, FName, FNumber, FModel, FUnitID, FUnitName, FOnlineDate, FQty, FPrice, auxType, FMaxPrice, onsale, DeliveryCount)
+--5.2上架商品_合并商品
+SELECT t1.FParentID, ISNULL(t1.FImageUrl, '') AS FImageUrl, ISNULL(t1.FParentName, '') AS FName, ISNULL(t1.FParentNumber, '') AS FNumber,
+ --ISNULL(t1.FParentModel, '') AS FModel, 
+----老师修改规格型号
+	'历销价:'+ISNULL(convert(NVARCHAR(20),SYINNER.FAuxPriceDiscount ),'')+ISNULL(t1.FParentModel, '') AS FModel,
+--老师修改规格型号
+t2.FMeasureUnitID AS FUnitID, t2.FName AS FUnitName, t1.FOnLIneDate, ROUND(ISNULL(t3.FQty, 0) / t2.FCoefficient, 0) AS FQty,
+	--默认两位数量精度
+	isnull(prExt.FPrice, 0) AS FPrice,
+	--商品价格
+	1 AS auxType,
+	--商品取值来源
+	isnull(prExt.FMaxPrice, 0) FMaxPrice, 1 AS onsale, 0 DeliveryCount
+FROM dbo.t_wo_ItemExt t1(NOLOCK)
+INNER JOIN dbo.t_MeasureUnit t2 ON t1.FUnit = t2.FMeasureUnitID
+INNER JOIN (
+	SELECT DISTINCT a.FParentID
+	FROM t_wo_ItemExt_Aux a
+	INNER JOIN t_ICItem t2(NOLOCK) ON a.FItemID = t2.FItemID
+	GROUP BY a.FParentID
+	) t4 ON t1.FParentID = t4.FParentID
+LEFT JOIN (
+	SELECT a.FParentID, SUM(ISNULL(b.FQty, 0)) AS FQty
+	FROM t_wo_ItemExt_Aux a(NOLOCK)
+	LEFT JOIN @stock b ON a.FItemID = b.FItemID
+	WHERE a.FStatus = 1
+	GROUP BY a.FParentID
+	) t3 ON t1.FParentID = t3.FParentID --库存信息  
+LEFT JOIN (
+	SELECT ext.FParentID, CASE 
+			WHEN max(isnull(pr.FMaxPrice, 0)) = 0
+				THEN isnull(MIN(eAux.FPrice), 0)
+			ELSE min(isnull(pr.FMinPrice, 0))
+			END AS FPrice, CASE 
+			WHEN max(isnull(pr.FMaxPrice, 0)) = 0
+				THEN isnull(max(eAux.FPrice), 0)
+			ELSE max(isnull(pr.FMaxPrice, 0))
+			END AS FMaxPrice
+	FROM t_wo_ItemExt ext(NOLOCK)
+	INNER JOIN t_wo_ItemExt_Aux eAux(NOLOCK) ON ext.FParentID = eAux.FParentID
+	LEFT JOIN @price pr ON pr.FItemID = eAux.FItemID
+	GROUP BY ext.FParentID
+	) prExt ON prExt.FParentID = t1.FParentID
+--老师新加语句
+LEFT JOIN 
+(select FcustID,FItemID,FAuxPriceDiscount FROM(    
+select A.FcustID,FItemID,FAuxPriceDiscount
+,row_number() over (partition by FItemID order by FDATE desc,a.FInterID desc) as group_idx    FROM ICSale a 
+Inner Join ICSaleEntry    b   on a.FInterID=b.FInterID 
+where A.FcustID=@custid ) A where A.group_idx = 1 ) SYINNER ON t1.FParentID=SYINNER.FItemID AND SYINNER.FcustID=@custid
+--老师新加语句
+WHERE @showType <> 2 AND t1.FStatus = 1 AND EXISTS (
+		SELECT 1
+		FROM #itembingo k
+		WHERE k.fitemid = t1.FParentID
+		)
+
+INSERT INTO @t (FItemID, FImageUrl, FName, FNumber, FModel, FUnitID, FUnitName, FOnlineDate, FQty, FPrice, auxType, FMaxPrice, onsale, DeliveryCount)
+--5.3上架商品_辅助属性商品
+SELECT CONVERT(NVARCHAR(50), t1.FItemID) AS FItemID,
+	--物料内码				
+	ISNULL(t1.FImageUrl, '') AS FImageUrl,
+	--图片
+	t2.FName,
+	--商品名称
+	t2.FNumber AS FNumber,
+	--商品代码
+	--ISNULL(t1.FModel, '') AS FModel,
+	----规格型号
+----老师修改规格型号
+	'历销价:'+ISNULL(convert(NVARCHAR(20),SYINNER.FAuxPriceDiscount ),'')+ISNULL(t1.FModel, '') AS FModel,
+--老师修改规格型号
+	t3.FMeasureUnitID AS FUnitID, t3.FName AS FUnitName,
+	--销售计量单位名称
+	t1.FOnLIneDate, ROUND(ISNULL(t4.FQty, 0) / t3.FCoefficient, 0) AS FQty,
+	--销售单位库存
+	isnull(pr.FMinPrice, 0) AS FMinPrice,
+	--商品价格
+	2 AS auxType, isnull(pr.FMaxPrice, 0) AS FMaxPrice, 1 AS onsale, 0 DeliveryCount
+FROM dbo.t_wo_Item t1(NOLOCK)
+INNER JOIN t_ICItem t2(NOLOCK) ON t1.FItemID = t2.FItemID
+INNER JOIN dbo.t_MeasureUnit t3(NOLOCK) ON t2.FSaleUnitID = t3.FMeasureUnitID
+LEFT JOIN (
+	SELECT t.FItemID, SUM(t.FQty) AS FQty
+	FROM @stock1 t
+	INNER JOIN t_wo_Item_Aux s(NOLOCK) ON t.FItemID = s.FItemID AND t.FAuxPropID = s.FAuxID
+	WHERE s.FStatus = 1
+	GROUP BY t.FItemID
+	) t4 ON t1.FItemID = t4.FItemID
+LEFT JOIN (
+	SELECT a.FItemID, CASE 
+			WHEN max(isnull(b.FMaxPrice, 0)) = 0
+				THEN isnull(MIN(a.FPrice), 0)
+			ELSE min(isnull(b.FMinPrice, 0))
+			END AS FMinPrice, CASE 
+			WHEN max(isnull(b.FMaxPrice, 0)) = 0
+				THEN isnull(max(a.FPrice), 0)
+			ELSE max(isnull(b.FMaxPrice, 0))
+			END AS FMaxPrice
+	FROM t_wo_item_aux a(NOLOCK)
+	LEFT JOIN @price b ON b.FItemID = a.FItemID
+	GROUP BY a.FItemID
+	) pr ON pr.FItemID = t1.FItemID --没有过滤上架属性
+--老师新加语句
+LEFT JOIN 
+(select FcustID,FItemID,FAuxPriceDiscount FROM(    
+select A.FcustID,FItemID,FAuxPriceDiscount
+,row_number() over (partition by FItemID order by FDATE desc,a.FInterID desc) as group_idx    FROM ICSale a 
+Inner Join ICSaleEntry    b   on a.FInterID=b.FInterID 
+where A.FcustID=@custid ) A where A.group_idx = 1 ) SYINNER ON t1.FItemID=SYINNER.FItemID AND SYINNER.FcustID=@custid
+--老师新加语句
+WHERE @showType <> 2 AND t1.FStatus = 1 AND (t2.FAuxClassID IS NOT NULL AND t2.FAuxClassID > 0) AND EXISTS (
+		SELECT 1
+		FROM #itembingo k
+		WHERE k.fitemid = convert(VARCHAR(100), t2.FItemID)
+		)
+
+INSERT INTO @t (FItemID, FImageUrl, FName, FNumber, FModel, FUnitID, FUnitName, FOnlineDate, FQty, FPrice, auxType, FMaxPrice, onsale, DeliveryCount)
+--5.4未上架商品有分类（含普通商品、有辅助属性的商品；含上架未审核、下架、及从未上架）	
+SELECT CONVERT(VARCHAR(50), t2.FItemID) AS FItemID,
+	--物料内码
+	'' AS FImageUrl,
+	--图片
+	t2.FName,
+	--商品名称
+	t2.FNumber AS FNumber,
+	--商品代码
+	--ISNULL(t2.FModel, '') AS FModel,
+	----规格型号
+----老师修改规格型号
+	'历销价:'+ISNULL(convert(NVARCHAR(20),SYINNER.FAuxPriceDiscount ),'')+ISNULL(t2.FModel, '') AS FModel,
+--老师修改规格型号
+	t3.FMeasureUnitID AS FUnitID, t3.FName AS FUnitName,
+	--销售计量单位名称
+	NULL AS FOnlineDate, ISNULL(t4.FQty, 0) / t3.FCoefficient AS FQty,
+	--销售单位库存
+	CASE 
+		WHEN isnull(pr.FMinPrice, 0) = 0 AND isnull(t2.fsaleprice, 0) * t3.FCoefficient <> 0
+			THEN isnull(t2.fsaleprice, 0) * t3.FCoefficient
+		ELSE isnull(pr.FMinPrice, 0)
+		END AS FPrice,
+	--商品价格
+	CASE 
+		WHEN t2.FAuxClassID > 0
+			THEN 2
+		ELSE 0
+		END AS auxType,
+	--商品取值来源
+	isnull(pr.FMaxPrice, 0) AS FMaxPrice,
+	--价格最大值
+	0 AS onsale, 0 DeliveryCount
+FROM t_ICItem t2
+INNER JOIN dbo.t_MeasureUnit t3(NOLOCK) ON t2.FSaleUnitID = t3.FMeasureUnitID
+LEFT JOIN dbo.t_wo_Item t1(NOLOCK) ON t1.FItemID = t2.FItemID AND t1.FStatus = 1
+
+LEFT JOIN @stock t4 ON t2.FItemID = t4.FItemID
+LEFT JOIN @price pr ON pr.FItemID = t2.FItemID --价格
+--老师新加语句
+LEFT JOIN 
+(select FcustID,FItemID,FAuxPriceDiscount FROM(    
+select A.FcustID,FItemID,FAuxPriceDiscount
+,row_number() over (partition by FItemID order by FDATE desc,a.FInterID desc) as group_idx    FROM ICSale a 
+Inner Join ICSaleEntry    b   on a.FInterID=b.FInterID 
+where A.FcustID=@custid ) A where A.group_idx = 1 ) SYINNER ON t1.FItemID=SYINNER.FItemID AND SYINNER.FcustID=@custid
+--老师新加语句
+WHERE @showType <> 1 AND (t2.FParentID IS NOT NULL AND t2.FParentID > 0) AND (t1.FItemID IS NULL OR t1.FStatus = 0) --不在上架商品里
+
+	AND EXISTS (
+		SELECT 1
+		FROM #itembingo k
+		WHERE k.fitemid = convert(VARCHAR(100), t2.FItemID)
+		) AND t2.FDeleted = 0
+
+INSERT INTO @t (FItemID, FImageUrl, FName, FNumber, FModel, FUnitID, FUnitName, FOnlineDate, FQty, FPrice, auxType, FMaxPrice, onsale, DeliveryCount)
+--5.5未上架商品的无分类(仅显示未上架情形的无分类,和全部情形的无分类)
+SELECT CONVERT(VARCHAR(50), t2.FItemID) AS FItemID,
+	--物料内码
+	ISNULL(t1.FImageUrl, '') AS FImageUrl,
+	--图片
+	t2.FName,
+	--商品名称
+	t2.FNumber AS FNumber,
+	--商品代码
+	--ISNULL(t2.FModel, '') AS FModel,
+	----规格型号
+----老师修改规格型号
+	'历销价:'+ISNULL(convert(NVARCHAR(20),SYINNER.FAuxPriceDiscount ),'')+ISNULL(t2.FModel, '') AS FModel,
+--老师修改规格型号
+	t3.FMeasureUnitID AS FUnitID, t3.FName AS FUnitName,
+	--销售计量单位名称
+	t1.FOnLIneDate, ISNULL(t4.FQty, 0) / t3.FCoefficient AS FQty,
+	--销售单位库存
+	CASE 
+		WHEN isnull(pr.FMinPrice, 0) = 0 AND isnull(t2.fsaleprice, 0) * t3.FCoefficient <> 0
+			THEN isnull(t2.fsaleprice, 0) * t3.FCoefficient
+		ELSE isnull(pr.FMinPrice, 0)
+		END AS FPrice,
+	--商品价格
+	CASE 
+		WHEN t2.FAuxClassID > 0
+			THEN 2
+		ELSE 0
+		END AS auxType,
+	--商品取值来源
+	isnull(pr.FMaxPrice, 0) AS FMaxPrice,
+	--价格最大值
+	0 AS onsale, 0 DeliveryCount
+FROM t_ICItem t2
+INNER JOIN t_Item t5 ON t5.FItemID = t2.FItemID AND t5.FDetail = 1
+INNER JOIN dbo.t_MeasureUnit t3(NOLOCK) ON t2.FSaleUnitID = t3.FMeasureUnitID
+LEFT JOIN t_ICItem i ON i.FItemID = t2.FItemID
+LEFT JOIN dbo.t_wo_Item t1(NOLOCK) ON t1.FItemID = t2.FItemID AND t1.FStatus = 1
+
+LEFT JOIN @stock t4 ON t2.FItemID = t4.FItemID
+LEFT JOIN @price pr ON pr.FItemID = t2.FItemID --价格
+--老师新加语句
+LEFT JOIN 
+(select FcustID,FItemID,FAuxPriceDiscount FROM(    
+select A.FcustID,FItemID,FAuxPriceDiscount
+,row_number() over (partition by FItemID order by FDATE desc,a.FInterID desc) as group_idx    FROM ICSale a 
+Inner Join ICSaleEntry    b   on a.FInterID=b.FInterID 
+where A.FcustID=@custid ) A where A.group_idx = 1 ) SYINNER ON t1.FItemID=SYINNER.FItemID AND SYINNER.FcustID=@custid
+--老师新加语句
+WHERE @showType <> 1 AND (t1.FItemID IS NULL OR t1.FItemID = 0) --不在上架商品里
+	AND (t2.FParentID IS NULL OR t2.FParentID = 0) 
+
+	AND t2.FDeleted = 0 AND EXISTS (
+		SELECT 1
+		FROM #itembingo k
+		WHERE k.fitemid = convert(VARCHAR(100), t2.FItemID)
+		)
+
+--更新图片	
+UPDATE t1
+SET t1.FImageUrl = (
+		SELECT TOP 1 FImageUrl
+		FROM t_wo_item_InfoExt
+		WHERE FItemID = t1.FItemID AND FType = 'image'
+		ORDER BY FSort
+		)
+FROM @t t1
+LEFT JOIN t_accessory t2 ON CONVERT(VARCHAR(50), t2.FItemID) = t1.FItemID
+WHERE isnull(t1.FImageUrl, '') = '' AND t1.onsale = 1
+
+UPDATE t1
+SET t1.needBaseImg = (
+		CASE 
+			WHEN ISNULL(t1.FImageUrl, '') = ''
+				THEN (
+						CASE 
+							WHEN t2.FFileSize > 0
+								THEN 1
+							ELSE 0
+							END
+						)
+			ELSE 0
+			END
+		)
+FROM @t t1
+LEFT JOIN t_accessory t2 ON CONVERT(VARCHAR(50), t2.FItemID) = t1.FItemID
+WHERE isnull(t1.FImageUrl, '') = '' AND t1.onsale = 1
+
+--未上架
+UPDATE t1
+SET t1.needBaseImg = (
+		CASE 
+			WHEN t2.FFileSize > 0
+				THEN 1
+			ELSE 0
+			END
+		)
+FROM @t t1
+LEFT JOIN t_accessory t2 ON CONVERT(VARCHAR(50), t2.FItemID) = t1.FItemID
+WHERE isnull(t1.FImageUrl, '') = '' AND t1.onsale = 0
+
+UPDATE t1
+SET t1.FImageUrl = CASE 
+		WHEN t1.needBaseImg = 0
+			THEN (
+					SELECT TOP 1 FImageUrl
+					FROM t_wo_item_InfoExt
+					WHERE FItemID = t1.FItemID AND FType = 'image'
+					ORDER BY FSort
+					)
+		ELSE ''
+		END
+FROM @t t1
+LEFT JOIN t_accessory t2 ON CONVERT(VARCHAR(50), t2.FItemID) = t1.FItemID
+WHERE isnull(t1.FImageUrl, '') = '' AND t1.onsale = 0
+
+--计算销售量
+DECLARE @c NVARCHAR(32)
+
+IF (@custid != 0)
+BEGIN
+	SET @c = cast(@custid AS NVARCHAR(32))
+
+	UPDATE t
+	SET DeliveryCount = (
+			SELECT isnull(SUM(m.FQty), 0)
+			FROM ICStockBillEntry AS m
+			INNER JOIN ICStockBill n ON n.FInterID = m.FInterID AND n.FTranType = 21 AND n.FROB = 1 AND n.FSelTranType <> 1005404 AND n.FSupplyID = @c
+			WHERE CONVERT(NVARCHAR(50), m.FItemID) = t.FItemID
+			)
+	FROM @t t
+END
+ELSE
+BEGIN
+	SET @c = cast(@custid AS NVARCHAR(32))
+
+	UPDATE t
+	SET DeliveryCount = (
+			SELECT isnull(SUM(m.FQty), 0)
+			FROM ICStockBillEntry AS m
+			INNER JOIN ICStockBill n ON n.FInterID = m.FInterID AND n.FTranType = 21 AND n.FROB = 1 AND n.FSelTranType <> 1005404
+			WHERE CONVERT(NVARCHAR(50), m.FItemID) = t.FItemID
+			)
+	FROM @t t
+END
+
+--返回结果集
+SELECT *
+FROM @t
+ORDER BY FNumber asc
